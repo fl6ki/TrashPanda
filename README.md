@@ -1,4 +1,4 @@
-# Trash Panda Media Converter v2.0.0
+# Trash Panda Media Converter v2.0.1
 
 A super simple tool for batch processing media files.
 
