@@ -14,4 +14,4 @@ A super simple tool for batch processing media files.
 - Image preview panel.
 
 ## Download
-You can download the latest version for Windows from the [Releases page](https://github.com/your-username/Trash-Panda-Media-Converter/releases).
+You can download the latest version for Windows from the [Releases page](https://github.com/fl6ki/TrashPanda/releases/tag/v2.0.0).
