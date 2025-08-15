@@ -12,6 +12,7 @@ import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 import shutil
 import webbrowser
+import logging
 
 # --- Optional Dependency Imports ---
 try:
@@ -25,12 +26,31 @@ except ImportError:
 
 # Register the HEIC opener with Pillow
 pillow_heif.register_heif_opener()
+logging.basicConfig(level=logging.INFO)
+
+SUPPORTED_IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.heic', '.webp', '.bmp', '.gif', '.tiff', '.svg', '.raf', '.cr2', '.cr3', '.arw', '.nef', '.dng')
+SUPPORTED_VIDEO_EXTS = ('.mp4', '.mov', '.avi', '.mkv')
+
+def find_ffmpeg_bin(name):
+    # First, check local directory (if bundled with exe, e.g. PyInstaller's _MEIPASS or .)
+    base_dirs = [getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__))), os.getcwd()]
+    for base in base_dirs:
+        candidate = os.path.join(base, name)
+        if os.path.isfile(candidate):
+            return candidate
+        # Windows: allow .exe
+        if os.name == 'nt':
+            candidate_exe = candidate + '.exe'
+            if os.path.isfile(candidate_exe):
+                return candidate_exe
+    # Else, fallback to PATH
+    return shutil.which(name)
 
 class MediaConverterApp(TkinterDnD.Tk):
     """
     An optimized GUI application for viewing metadata and converting media files.
-    Refactored into a class for better structure, performance, and maintainability.
     """
+
     def __init__(self):
         super().__init__()
         self.style = ttk.Style(theme="cosmo")
@@ -38,14 +58,15 @@ class MediaConverterApp(TkinterDnD.Tk):
 
         # --- Application Info ---
         self.APP_NAME = "Trash Panda"
-        self.APP_VERSION = "2.0.0" # Updated version
+        self.APP_VERSION = "v2.0.1"
         self.APP_AUTHOR = "fl6ki"
-        self.DONATION_LINK = "https://buymeacoffee.com/fl6ki" # Updated link
+        self.DONATION_LINK = "https://buymeacoffee.com/fl6ki"
 
         # --- Application State ---
         self.selected_files = []
-        self.ffmpeg_path = shutil.which('ffmpeg')
-        self.ffprobe_path = shutil.which('ffprobe')
+        # Try to find local ffmpeg/ffprobe first, then PATH
+        self.ffmpeg_path = find_ffmpeg_bin('ffmpeg')
+        self.ffprobe_path = find_ffmpeg_bin('ffprobe')
         self.current_theme = tk.StringVar(value="light")
 
         # --- Tkinter UI Variables ---
@@ -56,6 +77,7 @@ class MediaConverterApp(TkinterDnD.Tk):
         # --- UI Widget References ---
         self.file_listbox = None
         self.image_preview_label = None
+        self.image_preview_close_btn = None
         self.progress_bar = None
         self.progress_label = None
         self.status_bar_label = None
@@ -67,7 +89,7 @@ class MediaConverterApp(TkinterDnD.Tk):
         """Displays a splash screen while the app initializes."""
         splash = tk.Toplevel(self)
         splash.overrideredirect(True)
-        
+
         splash_width, splash_height = 400, 400
         screen_width, screen_height = self.winfo_screenwidth(), self.winfo_screenheight()
         x = (screen_width // 2) - (splash_width // 2)
@@ -90,7 +112,7 @@ class MediaConverterApp(TkinterDnD.Tk):
             tk.Label(splash, text="🐼", font=("Segoe UI Emoji", 120), bg="#ffffff").pack(pady=(50, 10))
 
         tk.Label(splash, text=f"{self.APP_NAME} is waking up...", font=("Segoe UI", 12, "bold"), bg="#ffffff", fg="#333333").pack()
-        
+
         splash.after(1200, lambda: [splash.destroy(), self.run_main_app()])
 
     def run_main_app(self):
@@ -100,17 +122,19 @@ class MediaConverterApp(TkinterDnD.Tk):
         if not self.ffmpeg_path or not self.ffprobe_path:
             messagebox.showwarning("Dependency Not Found",
                                    "FFmpeg/FFprobe not found. Video features will be disabled. "
-                                   "Please install FFmpeg and ensure it's in your system's PATH.")
+                                   "Please install FFmpeg and ensure it's in your system's PATH.\n"
+                                   "You can also place ffmpeg(.exe) and ffprobe(.exe) next to this executable.")
 
     def setup_main_window(self):
         """Creates all the widgets for the main application window."""
         self.title(f"{self.APP_NAME} Media Converter")
-        self.geometry("850x750") # Increased width for preview panel
-
+        self.geometry("850x750")
+        # Only set icon for main window
         try:
             base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
             icon_path = os.path.join(base_path, 'new_panda.ico')
-            if os.path.exists(icon_path): self.iconbitmap(icon_path)
+            if os.path.exists(icon_path):
+                self.iconbitmap(icon_path)
         except Exception as e:
             print(f"Could not load window icon: {e}")
 
@@ -131,7 +155,11 @@ class MediaConverterApp(TkinterDnD.Tk):
 
         list_frame = ttk.Labelframe(left_panel, text="Files", padding=10)
         list_frame.pack(fill="both", expand=True)
-        self.file_listbox = tk.Listbox(list_frame, selectmode=tk.SINGLE, width=40, height=12, bg="#f8f9fa", fg="#343a40", selectbackground="#0d6efd", selectforeground="white", font=("Segoe UI", 10), borderwidth=0, highlightthickness=0)
+        self.file_listbox = tk.Listbox(
+            list_frame, selectmode=tk.EXTENDED, width=40, height=12,
+            bg="#f8f9fa", fg="#343a40", selectbackground="#0d6efd", selectforeground="white",
+            font=("Segoe UI", 10), borderwidth=0, highlightthickness=0
+        )
         self.file_listbox.pack(pady=5, fill="both", expand=True)
         self.file_listbox.bind("<<ListboxSelect>>", self.on_file_select)
         self.file_listbox.bind("<Delete>", self.delete_selected_files)
@@ -139,7 +167,7 @@ class MediaConverterApp(TkinterDnD.Tk):
 
         button_frame = ttk.Frame(left_panel)
         button_frame.pack(pady=5, fill="x")
-        button_frame.columnconfigure((0, 1), weight=1)
+        button_frame.columnconfigure((0, 1, 2), weight=1)
         self.action_buttons['select'] = ttk.Button(button_frame, text="Select Files", style="primary.TButton", command=self.select_files)
         self.action_buttons['select'].grid(row=0, column=0, padx=2, pady=2, sticky="ew")
         self.action_buttons['clear'] = ttk.Button(button_frame, text="Clear List", style="warning.TButton", command=self.clear_file_list)
@@ -152,8 +180,17 @@ class MediaConverterApp(TkinterDnD.Tk):
         main_pane.add(right_panel, weight=2)
         preview_lf = ttk.Labelframe(right_panel, text="Image Preview", padding=10)
         preview_lf.pack(fill="both", expand=True)
-        self.image_preview_label = ttk.Label(preview_lf, text="Select an image to preview", anchor="center")
-        self.image_preview_label.pack(fill="both", expand=True)
+        preview_frame = ttk.Frame(preview_lf)
+        preview_frame.pack(fill="both", expand=True)
+        self.image_preview_label = ttk.Label(preview_frame, text="Select an image to preview", anchor="center")
+        self.image_preview_label.pack(fill="both", expand=True, side="left")
+        # Small, flat, black "X" in the top-right
+        self.image_preview_close_btn = tk.Button(
+            preview_frame, text="✕", command=self.clear_preview,
+            relief="flat", bd=0, fg="black", bg="#f8f9fa", font=("Segoe UI", 10, "bold"),
+            activebackground="#e9ecef", activeforeground="black", cursor="hand2"
+        )
+        self.image_preview_close_btn.place(relx=1.0, y=0, anchor="ne", x=-2)
 
         # --- BOTTOM SECTION (Options & Conversion) ---
         options_lf = ttk.Labelframe(self, text="Processing Options", padding=15)
@@ -186,9 +223,11 @@ class MediaConverterApp(TkinterDnD.Tk):
         if self.style.theme.name == "cosmo":
             self.style.theme_use("darkly")
             self.file_listbox.config(bg="#343a40", fg="white")
+            self.image_preview_close_btn.config(bg="#212529", fg="white", activebackground="#343a40", activeforeground="white")
         else:
             self.style.theme_use("cosmo")
             self.file_listbox.config(bg="#f8f9fa", fg="#343a40")
+            self.image_preview_close_btn.config(bg="#f8f9fa", fg="black", activebackground="#e9ecef", activeforeground="black")
 
     def show_about_window(self):
         """Displays the about window with app info and links."""
@@ -197,11 +236,10 @@ class MediaConverterApp(TkinterDnD.Tk):
         about.geometry("450x250")
         about.transient(self)
         about.resizable(False, False)
-
         ttk.Label(about, text=self.APP_NAME, font=("Segoe UI", 20, "bold")).pack(pady=(15, 5))
         ttk.Label(about, text=f"Version {self.APP_VERSION}", style="secondary.TLabel").pack()
         ttk.Label(about, text=f"Created by {self.APP_AUTHOR}").pack(pady=(0, 20))
-        ttk.Label(about, text="A super simple tool for batch processing media files.").pack() # Updated description
+        ttk.Label(about, text="A super simple tool for batch processing media files.").pack()
         link_label = ttk.Label(about, text="Support the developer", style="info.TLabel", cursor="hand2")
         link_label.pack(pady=10)
         link_label.bind("<Button-1>", lambda e: webbrowser.open(self.DONATION_LINK))
@@ -216,43 +254,41 @@ class MediaConverterApp(TkinterDnD.Tk):
         selected_indices = self.file_listbox.curselection()
         if not selected_indices:
             return
-        
         file_path = self.selected_files[selected_indices[0]]
-        
-        # Start a thread to load the image preview to avoid UI freeze
         threading.Thread(target=self.update_image_preview, args=(file_path,), daemon=True).start()
 
     def update_image_preview(self, file_path):
         """Loads and displays an image thumbnail in the preview panel."""
         try:
             ext = os.path.splitext(file_path)[1].lower()
-            if ext not in ('.jpg', '.jpeg', '.png', '.heic', '.webp', '.bmp', '.gif', '.tiff'):
+            if ext not in SUPPORTED_IMAGE_EXTS:
                 self.after(0, self.image_preview_label.config, {"text": "No preview available\n(not a standard image)", "image": ""})
                 return
+            if not os.path.exists(file_path):
+                self.after(0, self.image_preview_label.config, {"text": "File missing", "image": ""})
+                return
 
-            # Open image and create a thumbnail
             img = Image.open(file_path)
-            
-            # Get preview panel size for accurate thumbnailing
             preview_width = self.image_preview_label.winfo_width()
             preview_height = self.image_preview_label.winfo_height()
-            if preview_width < 50 or preview_height < 50: # Handle initial zero-size case
+            if preview_width < 50 or preview_height < 50:
                 preview_width, preview_height = 400, 400
 
             img.thumbnail((preview_width - 20, preview_height - 20), Image.Resampling.LANCZOS)
-            
             photo_image = ImageTk.PhotoImage(img)
 
-            # Schedule UI update on main thread
             def set_image():
                 self.image_preview_label.config(image=photo_image, text="")
-                self.image_preview_label.image = photo_image # Keep a reference!
-            
+                self.image_preview_label.image = photo_image
             self.after(0, set_image)
-
         except Exception as e:
-            print(f"Error creating preview for {file_path}: {e}")
+            logging.error(f"Error creating preview for {file_path}: {e}")
             self.after(0, self.image_preview_label.config, {"text": "Preview failed to load", "image": ""})
+
+    def clear_preview(self):
+        """Clears the image preview panel."""
+        self.image_preview_label.config(image="", text="Select an image to preview")
+        self.image_preview_label.image = None
 
     def update_file_listbox(self):
         self.file_listbox.delete(0, tk.END)
@@ -264,11 +300,25 @@ class MediaConverterApp(TkinterDnD.Tk):
     def select_files(self):
         files = filedialog.askopenfilenames()
         if files:
-            current_files = set(self.selected_files)
-            for f in files:
+            self.add_files(files)
+
+    def add_files(self, files):
+        """Add files or folders (recursively if folders) to the file list."""
+        current_files = set(self.selected_files)
+        for f in files:
+            if os.path.isdir(f):
+                for root, _, filenames in os.walk(f):
+                    for fn in filenames:
+                        full_path = os.path.join(root, fn)
+                        ext = os.path.splitext(full_path)[1].lower()
+                        if ext in SUPPORTED_IMAGE_EXTS or ext in SUPPORTED_VIDEO_EXTS:
+                            if full_path not in current_files:
+                                self.selected_files.append(full_path)
+                                current_files.add(full_path)
+            else:
                 if f not in current_files:
                     self.selected_files.append(f)
-            self.update_file_listbox()
+        self.update_file_listbox()
 
     def clear_file_list(self):
         self.selected_files.clear()
@@ -276,11 +326,7 @@ class MediaConverterApp(TkinterDnD.Tk):
 
     def drop(self, event):
         files = self.tk.splitlist(event.data)
-        current_files = set(self.selected_files)
-        for f in files:
-            if f not in current_files:
-                self.selected_files.append(f)
-        self.update_file_listbox()
+        self.add_files(files)
 
     def delete_selected_files(self, event=None):
         selected_indices = self.file_listbox.curselection()
@@ -300,17 +346,16 @@ class MediaConverterApp(TkinterDnD.Tk):
         if not self.selected_files:
             messagebox.showerror("Error", "Please select files first.")
             return
-        
+
         def metadata_worker():
             combined_text = ""
             for f in self.selected_files:
                 ext = os.path.splitext(f)[1].lower()
-                if ext in ('.mp4', '.mov', '.avi', '.mkv'):
+                if ext in SUPPORTED_VIDEO_EXTS:
                     combined_text += self.read_video_metadata(f)
                 else:
                     combined_text += self.read_photo_metadata(f)
-                combined_text += "\n" + "="*40 + "\n\n"
-            
+                combined_text += "\n" + "=" * 40 + "\n\n"
             self.after(0, self.show_text_popup, "Metadata Viewer", combined_text)
 
         threading.Thread(target=metadata_worker, daemon=True).start()
@@ -321,14 +366,14 @@ class MediaConverterApp(TkinterDnD.Tk):
             if ext in ('.raf', '.cr2', '.cr3', '.arw', '.nef', '.dng') and rawpy:
                 with rawpy.imread(image_path) as raw:
                     return f"File: {os.path.basename(image_path)}\n  Camera: {raw.camera_manufacturer} {raw.model}\n  Timestamp: {raw.timestamp}"
-            
             img = Image.open(image_path)
             exif_data = img.getexif()
             text_content = f"File: {os.path.basename(image_path)}\n"
             if exif_data:
                 for tag_id, value in exif_data.items():
                     tag = ExifTags.TAGS.get(tag_id, tag_id)
-                    if isinstance(value, bytes): value = value.decode(errors='replace')
+                    if isinstance(value, bytes):
+                        value = value.decode(errors='replace')
                     text_content += f"  {tag}: {value}\n"
             else:
                 text_content += "  No EXIF metadata found."
@@ -365,19 +410,17 @@ class MediaConverterApp(TkinterDnD.Tk):
         if not self.selected_files:
             messagebox.showerror("Error", "Please select files to convert.")
             return
-        
+
         format_popup = tk.Toplevel(self)
         format_popup.title("Choose Format")
         format_popup.geometry("300x150")
+        format_popup.transient(self)
         ttk.Label(format_popup, text="Select output format:").pack(pady=10)
-        
         has_svg = any(f.lower().endswith(".svg") for f in self.selected_files)
-        
         jpeg_radio = ttk.Radiobutton(format_popup, text="JPEG", variable=self.save_format_var, value="JPEG")
         jpeg_radio.pack(pady=5)
         png_radio = ttk.Radiobutton(format_popup, text="PNG", variable=self.save_format_var, value="PNG")
         png_radio.pack(pady=5)
-        
         if has_svg:
             self.save_format_var.set("PNG")
             jpeg_radio.config(state="disabled")
@@ -388,27 +431,41 @@ class MediaConverterApp(TkinterDnD.Tk):
 
         def on_confirm():
             format_popup.destroy()
-            output_folder = filedialog.askdirectory(title="Select Output Folder")
-            if output_folder:
-                threading.Thread(target=self.image_conversion_worker, args=(output_folder,), daemon=True).start()
-        
+            ask_output = messagebox.askyesno(
+                "Save Location",
+                "Do you want to choose a different output folder? (No = save in source folder)"
+            )
+            if ask_output:
+                output_folder = filedialog.askdirectory(title="Select Output Folder")
+                if not output_folder:
+                    return
+            else:
+                output_folder = None
+            threading.Thread(target=self.image_conversion_worker, args=(output_folder,), daemon=True).start()
+
         ttk.Button(format_popup, text="Confirm & Continue", command=on_confirm, style="primary.TButton").pack(pady=10)
 
     def image_conversion_worker(self, output_folder):
         self.after(0, self.set_ui_state, False)
         skipped_files = []
-        total_files = len(self.selected_files)
+        files_to_process = [f for f in self.selected_files if os.path.isfile(f) and os.path.splitext(f)[1].lower() in SUPPORTED_IMAGE_EXTS]
+        total_files = len(files_to_process)
+        self.after(0, self.progress_bar.config, {"maximum": total_files, "value": 0})
         target_format = self.save_format_var.get()
 
-        for idx, path in enumerate(self.selected_files):
+        for idx, path in enumerate(files_to_process):
             filename = os.path.basename(path)
             self.after(0, self.progress_label.config, {"text": f"Processing {idx + 1}/{total_files}: {filename}"})
-            self.after(0, self.progress_bar.config, {"value": idx})
+            self.after(0, self.progress_bar.config, {"value": idx + 1})
 
             try:
                 ext = os.path.splitext(path)[1].lower()
+                if output_folder:
+                    out_dir = output_folder
+                else:
+                    out_dir = os.path.dirname(path)
                 out_filename = os.path.splitext(filename)[0] + "_processed." + target_format.lower()
-                out_path = os.path.join(output_folder, out_filename)
+                out_path = os.path.join(out_dir, out_filename)
 
                 if ext == '.svg':
                     if target_format == "PNG" and cairosvg:
@@ -427,19 +484,20 @@ class MediaConverterApp(TkinterDnD.Tk):
                     pixel_data = list(img.getdata())
                     img = Image.new(img.mode, img.size)
                     img.putdata(pixel_data)
-                
+
                 if self.resize_images_var.get():
                     w, h = img.size
                     img = img.resize((w // 2, h // 2), Image.Resampling.LANCZOS)
 
                 if target_format == "JPEG":
-                    if img.mode in ('RGBA', 'P'): img = img.convert('RGB')
-                    img.save(out_path, 'JPEG', quality=95) # Fixed quality
+                    if img.mode in ('RGBA', 'P'):
+                        img = img.convert('RGB')
+                    img.save(out_path, 'JPEG', quality=95)
                 else:
                     img.save(out_path, 'PNG')
 
             except Exception as e:
-                print(f"Error converting {filename}: {e}")
+                logging.error(f"Error converting {filename}: {e}")
                 skipped_files.append(filename)
 
         self.after(0, self.progress_bar.config, {"value": total_files})
@@ -452,38 +510,50 @@ class MediaConverterApp(TkinterDnD.Tk):
         if not self.selected_files:
             messagebox.showerror("Error", "Please select video files to process.")
             return
-        output_folder = filedialog.askdirectory(title="Select Output Folder")
-        if output_folder:
-            threading.Thread(target=self.video_processing_worker, args=(output_folder,), daemon=True).start()
+
+        ask_output = messagebox.askyesno(
+            "Save Location",
+            "Do you want to choose a different output folder? (No = save in source folder)"
+        )
+        if ask_output:
+            output_folder = filedialog.askdirectory(title="Select Output Folder")
+            if not output_folder:
+                return
+        else:
+            output_folder = None
+
+        threading.Thread(target=self.video_processing_worker, args=(output_folder,), daemon=True).start()
 
     def video_processing_worker(self, output_folder):
         self.after(0, self.set_ui_state, False)
         skipped_files = []
-        total_files = len(self.selected_files)
+        files_to_process = [f for f in self.selected_files if os.path.isfile(f) and os.path.splitext(f)[1].lower() in SUPPORTED_VIDEO_EXTS]
+        total_files = len(files_to_process)
+        self.after(0, self.progress_bar.config, {"maximum": total_files, "value": 0})
 
-        for idx, path in enumerate(self.selected_files):
+        for idx, path in enumerate(files_to_process):
             filename = os.path.basename(path)
             ext = os.path.splitext(path)[1].lower()
-            if ext not in ('.mp4', '.mov', '.avi', '.mkv'):
-                continue
+            if output_folder:
+                out_dir = output_folder
+            else:
+                out_dir = os.path.dirname(path)
+            out_filename = os.path.splitext(filename)[0] + "_processed.mp4"
+            out_path = os.path.join(out_dir, out_filename)
 
             self.after(0, self.progress_label.config, {"text": f"Processing {idx + 1}/{total_files}: {filename}"})
-            self.after(0, self.progress_bar.config, {"value": idx})
-            
-            out_filename = os.path.splitext(filename)[0] + "_processed.mp4"
-            out_path = os.path.join(output_folder, out_filename)
+            self.after(0, self.progress_bar.config, {"value": idx + 1})
 
             try:
                 cmd = [self.ffmpeg_path, '-i', path, '-y']
                 if self.remove_metadata_var.get():
                     cmd.extend(['-map_metadata', '-1'])
                 cmd.extend(['-c:v', 'copy', '-c:a', 'copy', out_path])
-                
                 subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             except Exception as e:
-                print(f"Error processing video {filename}: {e}")
+                logging.error(f"Error processing video {filename}: {e}")
                 skipped_files.append(filename)
-        
+
         self.after(0, self.progress_bar.config, {"value": total_files})
         self.after(0, self.on_conversion_complete, skipped_files, "Videos")
 
